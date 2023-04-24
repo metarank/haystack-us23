@@ -1,0 +1,1168 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>Learning to Hybrid Search</title>
+
+		<link rel="stylesheet" href="dist/reset.css">
+		<link rel="stylesheet" href="dist/reveal.css">
+		<link rel="stylesheet" href="dist/theme/dracula.css">
+
+		<!-- Theme used for syntax highlighted code -->
+		<link rel="stylesheet" href="plugin/highlight/monokai.css">
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section>
+					<h1>Learning to Hybrid Search:</h1>
+					<h3>mixing BM25, LLMs and metadata into an ultimate ranking ensemble</h3>
+					<br>
+					<small>Grebennikov Roman | DeliveryHero SE | Haystack US 2023</small>
+				</section>
+				<section>
+          <h2>This is me</h2>
+          <img src="img/screaming_sun.png" height="300px">
+          <ul>
+              <li>Long ago: PhD in CS, quant trading, credit scoring</li>
+              <li>Search &amp; personalization for ~7 years</li>
+              <li><strong>Metarank</strong> maintainer</li>
+              <li><strong>DeliveryHero</strong>: search & relevance</li>
+          </ul>
+				</section>
+				<section>
+					<h2>A typical "hybrid search" talk:</h2>
+					<img src="img/opinion.gif">
+					<ul class="fragment">
+						<li>A is <strong>[maybe]</strong> better than B</li>
+						<li>Large C is <strong>[a bit]</strong> smarter than small D</li>
+						<li>You <strong>[probably]</strong> need E</li>
+					</ul>
+				</section>
+				<section>
+					<h2>No numbers, no comparisons</h2>
+					<ul>
+						<li class="fragment"><strong>Reproducability</strong>: proprietary tools and data</li>
+						<li class="fragment"><strong>Legal</strong>: insider information</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Many companies, same problems</h2>
+					<p><img src="img/breast.png" height="400px" style="margin: 0px;"></p>
+					<ul>
+						<li class="fragment"><strong>Relevance</strong>: making visitor happier</li>
+						<li class="fragment"><strong>CTR/Conversion</strong>: making company happier</li>
+						<li class="fragment"><strong>Query understanding</strong>: language, intent, semantics</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Open data + open tools</h2>
+					<p>One step closer to reproducability?</p>
+					<ul>
+						<li class="fragment">TREC = ❤️</li>
+						<li class="fragment">There <s>are</s> were no e-commerce datasets!</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Amazon ESCI: open e-com dataset</h2>
+					<p><img src="img/esci.png" height="350px"></p>
+					<ul>
+						<li>130k "hard queries" in EN/ES/JP</li>
+						<li>1.7M products</li>
+						<li>2.6M explicit relevance labels</li>
+					</ul>
+				</section>
+				<section>
+					<h2>130k hard queries</h2>
+					<p><img src="img/queries.png" height="400px"></p>
+				</section>
+				<section>
+					<h2>2.6M explicit ESCI labels</h2>
+					<table>
+						<tr>
+							<td><img src="img/labels.png" height="400px"></td>
+							<td style="vertical-align: middle;">
+								<ul>
+									<li><strong>E</strong>: exact match</li>
+									<li><strong>S</strong>: substitute</li>
+									<li><strong>C</strong>: complementary</li>
+									<li><strong>I</strong>: irrelevant</li>
+								</ul>
+								
+							</td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>1.7M real products</h2>
+					<pre><code data-trim data-noescape data-line-numbers class="json">
+  {
+    "product_id": "B07PT4BXWK",
+    "product_title": "Country Carrot, Artificial Vegetable Fake Food, 
+                      Bag of 12, 2 Sizes",
+    "product_description": "12 pcs vegetables atractive Artificial product. 
+                      Orange color with green stem, great for decorating. 
+                      Large size, approximately 6-inches (without stem).",
+    "product_bullet_point": "",
+    "product_brand": "Mezly",
+    "product_color": "Orange",
+    "product_locale": "us"
+  }
+					</code></pre>
+					<ul class="fragment">
+						<li>Text focused: no categories, metadata, reviews</li>
+						<li>product_id = ASIN</li>
+					</ul>
+				</section>
+				<section>
+					<img src="img/amazon.png">
+				</section>
+				<section>
+					<h2>ESCI-S: an extension to the ESCI</h2>
+					<img src="img/escis.png" height="400px" style="margin: 0px;">
+					<p>Scraped metadata for 92% of ESCI ASINs</p>
+					<p><a href="https://github.com/shuttie/esci-s">https://github.com/shuttie/esci-s</a></p>
+				</section>
+				<section>
+					<h2>Agenda</h2>
+					<p>Take the ESCI and do the "hybrid search"</p>
+					<ul>
+						<li class="fragment"><strong>Baseline</strong>: BM25</li>
+						<li class="fragment"><strong>LambdaMART</strong>: BM25 and metadata</li>
+						<li class="fragment"><strong>Bi-encoders</strong>: the notorious <strong>all-MiniLM-L6-v2</strong></li>
+						<li class="fragment"><strong>Fine-tuning</strong> bi-encoders</li>
+						<li class="fragment"><strong>Cross-encoders</strong>: off-the-shelf and fine-tuned</li>
+					</ul>
+					<p class="fragment">Minimal amount of ad-hoc Python code: <strong>Metarank</strong>!</p>
+				</section>
+				<section>
+					<p><img src="img/welcome.png" height="350px"></p>
+					<p>Hybrid search = a glorified Ensebmle Learning</p>
+					<ul>
+						<li class="fragment">Take N weak predictors</li>
+						<li class="fragment">Combine into an ensemble model</li>
+						<li class="fragment">"number of stars" = weak predictor</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Linear hybrid search</h2>
+					<p>query-title score distribution on ESCI:</p>
+					<table>
+						<tr>
+							<td><img src="img/bm25-dist.png"></td>
+							<td><img src="img/cos-dist.png"></td>
+						</tr>
+					</table>
+					<p class="fragment">score = w<sub>1</sub> * norm(bm25) + w<sub>2</sub> * norm(cos)</p>
+				</section>
+				<section>
+					<h2>Linear hybrid search</h2>
+					<p>Typical problems of</p>
+					<small>score = w<sub>1</sub> * norm(bm25) + w<sub>2</sub> * norm(cos)</small>
+					<br><br>
+					<ul>
+						<li class="fragment"><strong>Normalization</strong>: ad-hoc based on distribution</li>
+						<li class="fragment"><strong>Correlations</strong>: weights for 7-30-90 days CTR</li>
+						<li class="fragment"><strong>Linear</strong>: misses non-linear dependencies</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Why Metarank?</h2>
+					<p><img src="img/reranking.png" height="250px"></p>
+					<ul>
+						<li class="fragment">LambdaMART: NDCG, non-linear, correlations</li>
+						<li class="fragment">An open-source secondary reranker</li>
+						<li class="fragment"><strong>Search</strong>: focus on recall and speed</li>
+						<li class="fragment"><strong>Metarank</strong>: focus on top-N precision</li>
+					</ul>
+				</section>
+				<section>
+					<h2>How it works</h2>
+					<p><img src="img/deployment.png" height="250px"></p>
+					<ul>
+						<li class="fragment">Standalone Mode: no state, just files</li>
+						<li class="fragment">Import existing dataset, build ranking features</li>
+						<li class="fragment">Get NDCG over test set</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Baseline: random ranking</h2>
+					<p>Why do we need it?</p>
+					<ul>
+						<li>High rate of relevant products = high NDCG</li>
+						<li>NDCG lower bound</li>
+					</ul>
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+features:
+  - type: random
+    name: random
+
+models:
+  haystack-demo:
+    type: lambdamart
+    backend:
+      type: xgboost
+    features:
+      - random
+					</code></pre>
+				</section>
+				<section>
+					<video data-autoplay src="img/metarank-demo.mp4"></video>
+				</section>
+				<section>
+					<h2>Baseline: random ranking</h2>
+					<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>Random</td>
+							<td>0.6588</td>
+							<td>0.7220</td>
+							<td>0.8234</td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>Baseline: BM25</h2>
+					<ul>
+						<li class="fragment"><strong>Multiple fields in ES</strong>: optimal boosts?</li>
+						<li class="fragment"><strong>ES-LTR</strong>: hard to setup</li>
+						<li class="fragment">Compute BM25 without Lucene/ES? 🤔</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Down the BM25 hole</h2>
+					<img src="img/bm25.png">
+					<ul>
+						<li>Only term frequencies are needed</li>
+						<li>k<sub>1</sub>=1.2, b=0.75 as in Lucene/ES</li>
+					</ul>
+				</section>
+				<section>
+					<h2>BM25 without Lucene</h2>
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+ - type: field_match
+   name: query_desc_bm25
+   itemField: item.title
+   rankingField: ranking.query
+   method:
+     type: bm25
+     language: english
+     termFreq: termfreq.json
+
+					</code></pre>
+					<table class="fragment">
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>Random</td>
+							<td>0.6588</td>
+							<td>0.7220</td>
+							<td>0.8234</td>
+						</tr>
+						
+						<tr>
+							<td><strong>BM25(title)</strong></td>
+							<td><strong>0.7555</strong></td>
+							<td><strong>0.7966</strong></td>
+							<td><strong>0.8711</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>BM25 over multiple fields</h2>
+					<p>per-field score = weak predictor</p>
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+features:
+  - query_title_bm25
+  - query_desc_bm25
+  - query_bullets_bm25
+					</code></pre>
+					<table class="fragment">
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>Random</td>
+							<td>0.6588</td>
+							<td>0.7220</td>
+							<td>0.8234</td>
+						</tr>					
+						<tr>
+							<td>BM25(title)</td>
+							<td>0.7555</td>
+							<td>0.7966</td>
+							<td>0.8711</td>
+						</tr>
+						<tr>
+							<td><strong>BM25(title, desc, bullets)</strong></td>
+							<td><strong>0.7620</strong></td>
+							<td><strong>0.8023</strong></td>
+							<td><strong>0.8740</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<img src="img/pathetic.jpg" height="300px">
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+query: lawnmower tires without rims
+
+title: Dr.Roc Tire Spoon Lever Dirt Bike Lawn Mower Motorcycle 
+       Tire Changing Tools with Durable Bag 3 Tire Irons 2 
+       Rim Protectors 1 Valve Stems Set TR412 TR413
+
+title: MaxAuto 13x5.00-6 Lawn Mower Tires with Rim 13x5.00-6 
+       Tire and Wheel 13x5-6 NHS Tire 13x5x6 Pneumatic Tire
+					</code></pre>
+					<p>Years of Amazon-specific SEO optimization</p>
+				</section>
+
+				<section>
+					<h2>LTR: categorical features</h2>
+					<p><img src="img/dino.jpg" height="200px" style="margin: 0px;"></p>
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+  - type: string
+    name: material
+    field: item.material // color, category[1,2,3]
+    scope: item
+    encode: index // Supports XGBoost 1.7+/LightGBM 3+/Catboost
+                  // native categorical features
+    values:
+    - fabric
+    - glass
+    - leather
+    - ...
+</code></pre>
+				</section>
+				<section>
+					<h2>LTR: numeric features</h2>
+					<p><img src="img/dino2.jpg" height="250px" style="margin: 0px;"></p>
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+  - type: number
+    name: stars
+    field: item.stars
+    scope: item
+					</code></pre>
+					<p># stars, # ratings, price, weight</p>
+				</section>
+				<section>
+					<h2>LTR: 2017 edition</h2>
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+    features: [query_*_bm25, category*,
+               color,        material,
+               price,        ratings,
+               stars,        template,
+               weight]
+					</code></pre>
+					<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>Random</td>
+							<td>0.6588</td>
+							<td>0.7220</td>
+							<td>0.8234</td>
+						</tr>					
+						<tr>
+							<td>BM25(title)</td>
+							<td>0.7555</td>
+							<td>0.7966</td>
+							<td>0.8711</td>
+						</tr>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td><strong>LMart(bm25, meta)</strong></td>
+							<td><strong>0.7675</strong></td>
+							<td><strong>0.8075</strong></td>
+							<td><strong>0.8769</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h1>Hybrid Search</h1>
+				</section>
+				<section>
+					<h2>Traditional hybrid search</h2>
+					<p><img src="img/hybrid-search.png" height="300px" style="margin: 0px;"></p>
+					<p>Crafting embeddings:</p>
+					<ul>
+						<li class="fragment"><strong>Commercial providers</strong>: Cohere, OpenAI</li>
+						<li class="fragment"><strong>Pre-trained</strong>: sentence-transformers</li>
+						<li class="fragment"><strong>DIY</strong>: fine-tuning</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Siamese BERT networks</h2>
+					<p><img src="img/sbert.png" height="300px"></p>
+					<ul>
+						<li class="fragment">Document indexing can happen <strong>offline</strong>!</li>
+						<li class="fragment">Only need to embed <strong>query</strong> during search</li>
+						<li class="fragment">HNSW for Approximate k-NN</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Pre-trained all-MiniLM-L6-v2</h2>
+					<img src="img/st.png" height="400px">
+					<ul>
+						<li>Small and fast for CPU inference</li>
+						<li>Still precise on semantic search</li>
+					</ul>
+				</section>
+				<section>
+					<h2>all-MiniLM-L6-v2 in Python</h2>
+					<pre><code data-trim data-noescape data-line-numbers class="python">
+from sentence_transformers import SentenceTransformer, util
+model = SentenceTransformer('all-MiniLM-L6-v2')
+
+#Sentences are encoded by calling model.encode()
+emb1 = model.encode("This is a red cat with a hat.")
+emb2 = model.encode("Have you seen my red cat?")
+
+cos_sim = util.cos_sim(emb1, emb2)
+print("Cosine-Similarity:", cos_sim)
+					</code></pre>
+					<p class="fragment">Fine, but our search stack is in Java!</p>
+				</section>
+				<section>
+					<h2>all-MiniLM-L6-v2 in Java/ONNX</h2>
+					<img src="img/owl.jpg" height="300px" style="margin: 0px;">
+					<pre><code data-trim data-noescape data-line-numbers class="scala fragment">
+val text = "This is a red cat with a hat"
+val vocab =  DefaultVocabulary.builder().addFromTextFile(...).build()
+val bert = new BertFullTokenizer(vocab, true)
+val tokensStrings = "[CLS]" :: bert.tokenize(text) :: "[SEP]"
+
+val tokens = tokensStrings.map(t => vocab.getIndex(t)).toArray
+val attmask  = Array.fill(tokens.length)(1L)
+val tokenTypes = Array.fill(tokens.length)(0L)
+					</code></pre>
+				</section>
+				<section>
+					<h2>all-MiniLM-L6-v2 in Java/ONNX</h2>
+					<pre><code data-trim data-noescape data-line-numbers class="scala">
+val env     = OrtEnvironment.getEnvironment()
+val session = env.createSession("minilm-v2.onnx", new SessionOptions())
+val size = Array(1, tokens.length)
+
+val tensor1 = OnnxTensor.createTensor(env, LongBuffer.wrap(tokens), size)
+val tensor2 = OnnxTensor.createTensor(env, LongBuffer.wrap(attmask), size)
+val tensor3 = OnnxTensor.createTensor(env, LongBuffer.wrap(tokenTypes), size)
+val out = session.run(Map(
+  "input_ids" -> tensor1, 
+  "token_type_ids" -> tensor3, 
+  "attention_mask" -> tensor2).asJava)
+
+val preds = out.get(0).getValue.asInstanceOf[Array[Array[Array[Float]]]
+
+					</code></pre>
+					<p class="fragment">As seen in: Vespa, OpenSearch Model Serving, Metarank</p>
+				</section>
+				<section>
+					<h2>Bi-encoders in practice</h2>
+					<pre><code data-trim data-noescape data-line-numbers class="yaml">
+  - type: field_match
+    name: query_title_minilm6
+    itemField: item.title
+    rankingField: ranking.query
+    method:
+      type: bi-encoder
+      model: metarank/all-MiniLM-L6-v2
+      dim: 384
+					</code></pre>
+					<table class="fragment">
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>Random</td>
+							<td>0.6588</td>
+							<td>0.7220</td>
+							<td>0.8234</td>
+						</tr>					
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td>LMart(bm25, meta)</td>
+							<td>0.7675</td>
+							<td>0.8075</td>
+							<td>0.8769</td>
+						</tr>
+						<tr>
+							<td><strong>all-MiniLM-L6-v2</strong></td>
+							<td><strong>0.7670</strong></td>
+							<td><strong>0.8069</strong></td>
+							<td><strong>0.8775</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>Bi-encoder models</h2>
+					<ul>
+						<li>metarank/<strong>all-MiniLM-L6-v2</strong>: 10M, 386 dims</li>
+						<li>metarank/<strong>all-MiniLM-L12-v2</strong>: 15M, more layers</li>
+						<li>metarank/<strong>all-mpnet-base-v2</strong>: 100M, 768 dims</li>
+					</ul>
+					<br><br>
+					<table class="fragment">
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>all-MiniLM-L6-v2</td>
+							<td>0.7670</td>
+							<td>0.8069</td>
+							<td>0.8775</td>
+						</tr>					
+						<tr>
+							<td>all-MiniLM-L12-v2</td>
+							<td>0.7685</td>
+							<td>0.8077</td>
+							<td>0.8786</td>
+						</tr>
+						<tr>
+							<td><strong>all-mpnet-base-v2</strong></td>
+							<td><strong>0.7694</strong></td>
+							<td><strong>0.8089</strong></td>
+							<td><strong>0.8794</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>Bring-your-own-model with ONNX</h2>
+					<p>ONNX: Vespa, OpenSearch Model Serving, Metarank</p>
+					<pre><code data-trim data-noescape class="bash">
+
+$> pip install transformers[onnx] sentence-transformers
+$> python -m transformers.onnx \
+          --model=sentence-transformers/all-MiniLM-L6-v2 \
+          export_dir
+					</code></pre>
+				</section>
+				<section>
+					<h2>LTR with bi-encoders</h2>
+					<p>Cosine similarity = yet another ranking feature</p>
+					<table class="fragment">
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td>LM(bm25, meta)</td>
+							<td>0.7675</td>
+							<td>0.8075</td>
+							<td>0.8769</td>
+						</tr>
+						<tr>
+							<td>all-MiniLM-L6-v2</strong></td>
+							<td>0.7670</td>
+							<td>0.8069</td>
+							<td>0.8775</td>
+						</tr>
+						<tr>
+							<td><strong>LM(bm25, minilm)</strong></td>
+							<td><strong>0.7816</strong></td>
+							<td><strong>0.8168</strong></td>
+							<td><strong>0.8840</strong></td>
+						</tr>
+						<tr>
+							<td><strong>LM(bm25, minilm, meta)</strong></td>
+							<td><strong>0.7825</strong></td>
+							<td><strong>0.8186</strong></td>
+							<td><strong>0.8846</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>Fine-tuning?</h2>
+				</section>
+				<section>
+					<img src="img/easy.png" height="650px">
+				</section>
+				<section>
+					<h2>What is fine-tuning?</h2>
+					<img src="img/fine-tuning.png" height="350px" style="margin: 0px;">
+					<ul>
+						<li><strong>Existing LLM</strong> as a source</li>
+						<li><strong>Custom loss</strong>: minimize cosine distance</li>
+						<li><strong>Slightly</strong> update weights on a new dataset</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Which LLM to pick?</h2>
+					<ul>
+						<li class="fragment">
+							<strong>MS MiniLM, T5, GPT-J</strong>: 
+							<ul>
+								<li>pro: any model from HuggingFace</li>
+								<li>con: no clue about sentence similarity</li>
+								<li>con: needs a large dataset, slow</li>
+							</ul>
+						</li>
+						<li class="fragment"><strong>sentence-transformers</strong>:
+							<ul>
+								<li>pro: 1K queries is a good start</li>
+								<li>con: no recent models</li>
+							</ul>
+						</li>
+					</ul>
+				</section>
+				<section>
+					<h2>CosineSimilarityLoss</h2>
+					<p>Minimizes the distance within each sample</p>
+					<p class="fragment">Needs triplets of query-document-score:</p>
+					<ul class="fragment">
+						<li><strong>Linear mapping</strong>: E-S-C-I to [1.0, 0.66, 0.33, 0.0]</li>
+						<li><strong>Exponential mapping</strong>: E-S-C-I to [1.0, 0.1, 0.001, 0.0]</li>
+					</ul>
+					<p class="fragment">From docs: no need for hard negatives, slow to converge</p>
+				</section>
+				<section>
+					<h2>MultipleNegativesRankingLoss</h2>
+					<p class="fragment">Needs triplets of query-positive-negative:</p>
+					<ul class="fragment">
+						<li><strong>E/I</strong>: Exact = positive, Irrelevant = negative</li>
+						<li><strong>E/SCI</strong>: Exact = positive, other = negative</li>
+					</ul>
+					<p style="margin: 0px" class="fragment"><img src="img/hn.png" height="300px" style="margin: 0px"></p>
+					<p class="fragment">From docs: hard negatives needed, fast to converge</p>
+				</section>
+				<section>
+					<h2>Quality of negatives</h2>
+					<ul>
+						<li>Easy: distinguish dogs from trains</li>
+						<li>Hard: distinguish breeds of dogs</li>
+					</ul>
+					<p><img src="img/chi.jpg" height="400px"></p>
+				</section>
+				<section>
+					<h2>Implicit feedback as labels</h2>
+					<p><img src="img/implicit.png" height="550px"></p>
+				</section>
+				<section>
+					<h2>Implicit feedback as labels</h2>
+					<p><img src="img/implicit.png" height="350px" style="margin: 0px;"></p>
+					<ul>
+						<li><strong>Green</strong>: high per-query CTR, high confidence</li>
+						<li><strong>Yellow</strong>: low confidence</li>
+						<li><strong>Red</strong>: low per-query CTR, high confidence</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Fine-tuning is easy</h2>
+					<p>(when you have a GPU)</p>
+					<pre><code data-trim data-noescape class="python">
+model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+
+train_dataset = ESCIDataset(input='train-small.json.gz')
+eval_dataset = ESCIDataset(input='test-small.json.gz')
+train_dataloader = DataLoader(train_dataset, shuffle=True)
+train_loss = losses.CosineSimilarityLoss(model=model)
+
+
+model.fit(train_objectives=[(train_dataloader, train_loss)],
+          epochs=1,
+          optimizer_params = {'lr': 1e-5},
+          output_path=model_save_path)
+
+model.save(model_save_path)
+					</code></pre>
+				</section>
+				<section>
+					<h2>Things to watch for</h2>
+					<ul>
+						<li><strong>Batch size</strong>: the largest value your GPU can fit</li>
+						<li><strong>Epochs</strong>: 1-2, quick over-fitting</li>
+						<li><strong>Cheap GPUs</strong>: Google Colab, Kaggle, vast.ai</li>
+					</ul>
+				</section>
+				<section>
+					<h2>CPU vs GPU</h2>
+					<p><img src="img/not-hard.png" height="350px" style="margin: 0px;"></p>
+					<p>all-MiniLM-L6-v2 over ESCI dataset:</p>
+					<ul>
+						<li><strong>RTX 3060</strong>: 6 minutes</li>
+						<li><strong>Ryzen 7 2600</strong>: 240 minutes</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Fine-tuned bi-encoders</h2>
+					<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td>all-MiniLM-L6</strong></td>
+							<td>0.7670</td>
+							<td>0.8069</td>
+							<td>0.8775</td>
+						</tr>
+						<tr class="fragment">
+							<td>esci-MiniLM-L6, MN e/i</td>
+							<td>0.7783</td>
+							<td>0.8161</td>
+							<td>0.8834</td>
+						</tr>
+						<tr class="fragment">
+							<td>esci-MiniLM-L6, MN e/sci</td>
+							<td>0.7838</td>
+							<td>0.8212</td>
+							<td>0.8864</td>
+						</tr>
+						<tr class="fragment">
+							<td>esci-MiniLM-L6, cos+lin</td>
+							<td>0.7800</td>
+							<td>0.8184</td>
+							<td>0.8845</td>
+						</tr>
+						<tr class="fragment">
+							<td><strong>esci-MiniLM-L6, cos+exp</strong></td>
+							<td><strong>0.7881</strong></td>
+							<td><strong>0.8240</strong></td>
+							<td><strong>0.8874</strong></td>
+						</tr>
+					</table>
+
+				</section>
+				<section>
+					<h2>L12 and MPNET fine-tuning</h2>
+					<img src="img/deeper.jpg" height="200px" style="margin: 0px;">
+					<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td><strong>esci-MiniLM-L6, cos+exp</strong></td>
+							<td><strong>0.7881</strong></td>
+							<td><strong>0.8240</strong></td>
+							<td><strong>0.8874</strong></td>
+						</tr>
+						<tr class="fragment">
+							<td>esci-MiniLM-L12, MN e/sci</td>
+							<td>0.7818</td>
+							<td>0.8199</td>
+							<td>0.8858</td>
+						</tr>
+						<tr class="fragment">
+							<td><strong>esci-mpnet, cos+exp</strong></td>
+							<td><strong>0.7990</strong></td>
+							<td><strong>0.8329</strong></td>
+							<td><strong>0.8926</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>LTR and fine-tuned bi-encoders</h2>
+					<p>LTR never makes things worse</p>
+					<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td>LM(bm25, minilm, meta)</td>
+							<td>0.7825</td>
+							<td>0.8186</td>
+							<td>0.8846</td>
+						</tr>
+						<tr>
+							<td><strong>LM(bm25, mpn-ft, meta)</strong></td>
+							<td><strong>0.8053</strong></td>
+							<td><strong>0.8390</strong></td>
+							<td><strong>0.8959</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>Bi-encoder performance</h2>
+					<pre><code data-trim data-noescape class="csv">
+Benchmark     (batch)            (model)  Mode  Cnt   Score   Error  Units
+encode              1   all-MiniLM-L6-v2  avgt   30  13.350 ± 1.813  ms/op
+encode              1  all-MiniLM-L12-v2  avgt   30  25.954 ± 2.210  ms/op
+encode              1  all-mpnet-base-v2  avgt   30  64.208 ± 2.932  ms/op
+					</code></pre>
+				</section>
+				<section>
+					<h2>Conclusions</h2>
+					<ul>
+						<li class="fragment">Larger the LLM - smaller the training set</li>
+						<li class="fragment">Fine-tuning: simple way for a HUGE relevance boost</li>
+						<li class="fragment">ESCI != e-commerce</li>
+						<li class="fragment">Large LLMs are slow on CPU</li>
+					</ul>
+				</section>
+
+				<section>
+					<h1>Cross-encoders</h1>
+				</section>
+				<section>
+					<h2>Cross-encoders</h2>
+					<p><img src="img/cross.png" height="300px"></p>
+					<ul>
+						<li>Classifier head on top of BERT</li>
+						<li>No cosine similarity: let the LLM work</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Pre-trained CE</h2>
+                     <img src="img/st-ce.png">
+					<pre><code data-trim data-noescape class="python fragment">
+from sentence_transformers import CrossEncoder
+
+model = CrossEncoder('model_name', max_length=512)
+scores = model.predict([('How many people live in Berlin?', 
+                         'Berlin had a population of 3,520,031 people.'), 
+                        ('How many people live in Berlin?', 
+                         'Berlin is well known for its museums.')])					
+                     </code></pre>
+				</section>
+				<section>
+					<h2>CE: pros & cons</h2>
+					<p><img src="img/ce-cat.jpg" height="400px"></p>
+					<ul>
+						<li>ChatGPT: "how relevant is text A for query B"</li>
+						<li>No Approximate k-NN search, only top-N</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Generic SBERT</h2>
+					<pre><code data-trim data-noescape class="python">
+  - type: field_match
+    name: query_title_ce
+    itemField: item.title
+    rankingField: ranking.query
+    method:
+      type: cross-encoder
+      model: metarank/ce-all-MiniLM-L6-v2
+      dim: 384
+
+					</code></pre>
+						<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td>all-MiniLM-L6</td>
+							<td>0.7670</td>
+							<td>0.8069</td>
+							<td>0.8775</td>
+						</tr>
+						<tr>
+							<td>esci-mpnet</td>
+							<td>0.7990</td>
+							<td>0.8329</td>
+							<td>0.8926</td>
+						</tr>
+						<tr>
+							<td><strong>ce-msmarco-MiniLM-L6</strong></td>
+							<td><strong>0.7767</strong></td>
+							<td><strong>0.8120</strong></td>
+							<td><strong>0.8815</strong></td>
+						</tr>
+					</table>
+				</section>
+				<section>
+					<h2>Fine-tuning cross-encoders</h2>
+					<pre><code data-trim data-noescape class="python fragment">
+model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', num_labels=1)
+
+train_dataset = ESCIDataset(input='train-small.json.gz')
+train_dataloader = DataLoader(train_dataset, shuffle=True)
+
+model.fit(train_dataloader=train_dataloader,
+          epochs=num_epochs,
+          warmup_steps=warmup_steps,
+          optimizer_params = {'lr': lr},
+          output_path=model_save_path)
+
+model.save(model_save_path)
+					</code></pre>
+				</section>
+				<section>
+					<h2>CE fine-tuning results</h2>
+						<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td>all-MiniLM-L6</td>
+							<td>0.7670</td>
+							<td>0.8069</td>
+							<td>0.8775</td>
+						</tr>
+						<tr>
+							<td>esci-mpnet</td>
+							<td>0.7990</td>
+							<td>0.8329</td>
+							<td>0.8926</td>
+						</tr>
+						<tr>
+							<td>ce-msmarco-MiniLM-L6</td>
+							<td>0.7767</td>
+							<td>0.8120</td>
+							<td>0.8815</td>
+						</tr>
+						<tr class="fragment">
+							<td><strong>ce-esci-MiniLM-L6</strong></td>
+							<td><strong>0.8062</strong></td>
+							<td><strong>0.8364</strong></td>
+							<td><strong>0.8963</strong></td>
+						</tr>
+						<tr class="fragment">
+							<td><strong>ce-esci-MiniLM-L12</strong></td>
+							<td><strong>0.8134</strong></td>
+							<td><strong>0.8426</strong></td>
+							<td><strong>0.9001</strong></td>
+						</tr>
+					</table>
+					
+				</section>
+				<section>
+					<h2>Avengers, combine!</h2>
+					<pre><code data-trim data-noescape class="yaml">
+models:
+  default:
+    type: lambdamart
+    backend:
+      type: xgboost
+    features:
+      - query_title_mpnet
+      - query_title_ce
+      - query_title_bm25
+      - query_desc_bm25
+      - query_bullets_bm25
+      - category0
+      - category1
+      - category2
+      - color
+      - material
+      - price
+      - ratings
+      - stars
+      - template
+      - weight
+					</code></pre>
+				</section>
+				<section>
+					<h2>LTR in the mix</h2>
+						<table>
+						<thead>
+							<td></td>
+							<td>NDCG@5</td>
+							<td>NDCG@10</td>
+							<td>NDCG@20</td>
+						</thead>
+						<tr>
+							<td>BM25(title, desc, bullets)</td>
+							<td>0.7620</td>
+							<td>0.8023</td>
+							<td>0.8740</td>
+						</tr>
+						<tr>
+							<td>LM(bm25, minilm, meta)</td>
+							<td>0.7825</td>
+							<td>0.8186</td>
+							<td>0.8846</td>
+						</tr>
+						<tr>
+							<td>LM(bm25, mpn-ft, meta)</td>
+							<td>0.8053</td>
+							<td>0.8390</td>
+							<td>0.8959</td>
+						</tr>
+						<tr>
+							<td><strong>LM(OH, GOD, NO)</strong></td>
+							<td><strong>0.8228</strong></td>
+							<td><strong>0.8508</strong></td>
+							<td><strong>0.9041</strong></td>
+						</tr>
+					</table>
+
+				</section>
+				<section>
+					<h2>Cross-encoder performance</h2>
+					<p><img src="img/beir.png" height="300px"></p>
+					<pre><code data-trim data-noescape class="csv fragment">
+Benchmark (batch)                  (model)  Mode  Cnt    Score    Error  Units
+encode          1  ce-msmarco-MiniLM-L6-v2  avgt   30   12.298 ±  0.581  ms/op
+encode         10  ce-msmarco-MiniLM-L6-v2  avgt   30   58.664 ±  2.064  ms/op
+encode        100  ce-msmarco-MiniLM-L6-v2  avgt   30  740.422 ± 13.369  ms/op
+					</code></pre>
+				</section>
+				<section>
+					<h2>BE & CE pre-caching</h2>
+					<pre><code data-trim data-noescape class="yaml">
+- type: field_match
+  name: query_title_ce
+  itemField: item.title
+  rankingField: ranking.query
+  method:
+    type: cross-encoder
+    model: metarank/ce-esci-MiniLM-L6-v2
+    cache: precomputed-cache.csv
+					</code></pre>
+					<ul>
+						<li><strong>BE</strong>: pre-compute query embeddings for top-100k</li>
+						<li><strong>CE</strong>: pre-compute scores for top-10k queries x top-100 results</li>
+					</ul>
+				</section>
+				<section>
+					<h2>Are CE practical?</h2>
+					<p><img src="img/3level.png" height="400px" style="margin: 0px;"></p>
+					<ul>
+						<li>Either top-10, or GPU inference</li>
+					</ul>
+				</section>
+				<section>
+					<h2>GPU cloud instance costs</h2>
+					<table>
+						<thead>
+							<td>Instance</td>
+							<td>GPU</td>
+							<td>On-demand</td>
+						</thead>
+						<tbody>
+							<tr>
+								<td>AWS g4dn.xlarge</td>
+								<td>T4</td>
+								<td>378$/month</td>
+							</tr>
+							<tr>
+								<td>AWS P3.2xlarge</td>
+								<td>V100</td>
+								<td>2203$/month</td>
+							</tr>
+						</tbody>
+					</table>
+				</section>
+				<section>
+					<h2>TREC'23 E-Commerse Search</h2>
+					<p><img src="img/game.gif" height="200px" style="margin: 0px;"></p>
+					<ul class="fragment">
+						<li><strong>E2E retrieval</strong>: search over complete ESCI</li>
+						<li><strong>Ranking</strong>: re-rank top-100 matching docs</li>
+						<li><strong>Multi-modal</strong>: with clicks and images</li>
+					</ul>
+					<p class="fragment">Dataset release: May 1, submissions till Aug 9</p>
+					<a class="fragment" href="https://trec-product-search.github.io/index.html">https://trec-product-search.github.io</a>
+				</section>
+				<section>
+					<h2>Conclusions</h2>
+					<ul>
+						<li><strong>Fine-tuning is worth it</strong>: cheap, easy, fast</li>
+						<li>Balance between <strong>hardware costs</strong> and ranking quality</li>
+						<li><strong>BE/CE/LM</strong> are not perfect: ensemble learning FTW</li>
+					</ul>
+				</section>
+				<section>
+					<h1>Questions</h1>
+				</section>
+			</div>
+		</div>
+
+		<script src="dist/reveal.js"></script>
+		<script src="plugin/notes/notes.js"></script>
+		<script src="plugin/markdown/markdown.js"></script>
+		<script src="plugin/highlight/highlight.js"></script>
+		<script>
+			// More info about initialization & config:
+			// - https://revealjs.com/initialization/
+			// - https://revealjs.com/config/
+			Reveal.initialize({
+				hash: true,
+                history: true,
+                controls: true,
+                progress: true,
+                width: 1200,
+                transition: 'none',
+                slideNumber: true,
+
+				// Learn about plugins: https://revealjs.com/plugins/
+				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
+			});
+		</script>
+	</body>
+</html>
