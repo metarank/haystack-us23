@@ -944,9 +944,8 @@ train_dataset = ESCIDataset(input='train-small.json.gz')
 train_dataloader = DataLoader(train_dataset, shuffle=True)
 
 model.fit(train_dataloader=train_dataloader,
-          epochs=num_epochs,
-          warmup_steps=warmup_steps,
-          optimizer_params = {'lr': lr},
+          epochs=1,
+          optimizer_params = {'lr': 1e-5},
           output_path=model_save_path)
 
 model.save(model_save_path)
@@ -1001,29 +1000,17 @@ model.save(model_save_path)
 					
 				</section>
 				<section>
-					<h2>Avengers, combine!</h2>
+					<h2>Avengers, assemble!</h2>
+					<p><img src="img/pr.jpg" height="200px" style="margin: 0px;"></p>
 					<pre><code data-trim data-noescape class="yaml">
 models:
   default:
     type: lambdamart
     backend:
       type: xgboost
-    features:
-      - query_title_mpnet
-      - query_title_ce
-      - query_title_bm25
-      - query_desc_bm25
-      - query_bullets_bm25
-      - category0
-      - category1
-      - category2
-      - color
-      - material
-      - price
-      - ratings
-      - stars
-      - template
-      - weight
+    features: [query_title_mpnet, query_title_ce, query_title_bm25,
+      query_desc_bm25, query_bullets_bm25, category0, category1,
+      category2, color, material, price, ratings, stars, template, weight]
 					</code></pre>
 				</section>
 				<section>
@@ -1098,6 +1085,7 @@ encode        100  ce-msmarco-MiniLM-L6-v2  avgt   30  740.422 ± 13.369  ms/op
 				</section>
 				<section>
 					<h2>GPU cloud instance costs</h2>
+					<img src="img/thanos.jpg" height="350px" style="margin: 0px;">
 					<table>
 						<thead>
 							<td>Instance</td>
@@ -1120,7 +1108,7 @@ encode        100  ce-msmarco-MiniLM-L6-v2  avgt   30  740.422 ± 13.369  ms/op
 				</section>
 				<section>
 					<h2>TREC'23 E-Commerse Search</h2>
-					<p><img src="img/game.gif" height="200px" style="margin: 0px;"></p>
+					<p><img src="img/game.gif" height="200px" style="margin: 0px;" class="fragment"></p>
 					<ul class="fragment">
 						<li><strong>E2E retrieval</strong>: search over complete ESCI</li>
 						<li><strong>Ranking</strong>: re-rank top-100 matching docs</li>
@@ -1135,11 +1123,12 @@ encode        100  ce-msmarco-MiniLM-L6-v2  avgt   30  740.422 ± 13.369  ms/op
 					<img src="img/playground.png" height="450px" style="margin: 0px;">
 				</section>
 				<section>
-					<h2>Conclusions</h2>
+					<h2>Final words</h2>
+					<img src="img/triangle.png" height="350px" style="margin:0px">
 					<ul>
-						<li><strong>Fine-tuning is worth it</strong>: cheap, easy, fast</li>
 						<li>Balance between <strong>hardware costs</strong> and ranking quality</li>
-						<li><strong>BE/CE/LM</strong> are not perfect: ensemble learning FTW</li>
+						<li class="fragment"><strong>Fine-tuning</strong> is worth it, even for mere mortals</li>
+						<li class="fragment"><strong>BE/CE/LM</strong> are not perfect: ensemble learning FTW</li>
 					</ul>
 				</section>
 				<section>
